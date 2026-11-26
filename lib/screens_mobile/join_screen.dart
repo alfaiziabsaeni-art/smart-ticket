@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'crew_home_screen.dart';
 
 const kRoles = ['Field Crew', 'Technical', 'Medical', 'Security', 'Logistics', 'Coordinator'];
@@ -13,6 +14,7 @@ class _JoinScreenState extends State<JoinScreen> {
   final _name = TextEditingController();
   final _code = TextEditingController();
   String _role = kRoles.first;
+  bool _busy = false;
 
   @override
   void dispose() {
@@ -21,15 +23,37 @@ class _JoinScreenState extends State<JoinScreen> {
     super.dispose();
   }
 
-  void _join() {
-    if (_name.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Enter your name first')));
+  Future<void> _join() async {
+    final msg = ScaffoldMessenger.of(context);
+    final code = _code.text.trim();
+    if (_name.text.trim().isEmpty || code.isEmpty) {
+      msg.showSnackBar(const SnackBar(content: Text('Enter your name and the event code')));
       return;
     }
-    // TODO: validate event code against Supabase, then save crew member + role
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (_) => CrewHomeScreen(name: _name.text.trim(), role: _role)),
-    );
+    setState(() => _busy = true);
+    try {
+      // The event code is the event id (uuid) shown in the QR from Setup Event
+      final ev = await Supabase.instance.client.from('events').select().eq('id', code).maybeSingle();
+      if (!mounted) return;
+      if (ev == null) {
+        msg.showSnackBar(const SnackBar(content: Text('Event not found. Check the code.')));
+        return;
+      }
+      final zones = List<String>.from(ev['zones'] ?? <String>[]);
+      Navigator.of(context).pushReplacement(MaterialPageRoute(
+        builder: (_) => CrewHomeScreen(
+          name: _name.text.trim(),
+          role: _role,
+          eventId: code,
+          eventName: ev['name'] as String? ?? 'Event',
+          zones: zones.isEmpty ? kZones : zones,
+        ),
+      ));
+    } catch (e) {
+      msg.showSnackBar(SnackBar(content: Text('Could not join: $e')));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   @override
@@ -51,9 +75,9 @@ class _JoinScreenState extends State<JoinScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('YOU ARE JOINING', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: kMuted)),
+                      Text('JOIN AN EVENT', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: kMuted)),
                       SizedBox(height: 4),
-                      Text('Campus Fest 2026', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+                      Text('Scan the QR or enter the code', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
                     ],
                   ),
                 ),
@@ -74,7 +98,7 @@ class _JoinScreenState extends State<JoinScreen> {
               TextField(
                 controller: _code,
                 decoration: const InputDecoration(
-                    labelText: 'Or enter event code', filled: true, fillColor: Colors.white, border: OutlineInputBorder()),
+                    labelText: 'Event code', filled: true, fillColor: Colors.white, border: OutlineInputBorder()),
               ),
               const SizedBox(height: 14),
               TextField(
@@ -111,8 +135,8 @@ class _JoinScreenState extends State<JoinScreen> {
                 height: 52,
                 child: FilledButton(
                   style: FilledButton.styleFrom(backgroundColor: kBlue),
-                  onPressed: _join,
-                  child: const Text('Join event', style: TextStyle(fontSize: 16)),
+                  onPressed: _busy ? null : _join,
+                  child: Text(_busy ? 'Joining…' : 'Join event', style: const TextStyle(fontSize: 16)),
                 ),
               ),
             ],

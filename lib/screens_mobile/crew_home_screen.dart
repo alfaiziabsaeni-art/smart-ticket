@@ -1,4 +1,9 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:record/record.dart';
+import '../services/ticket_service.dart'; // adjust if your file name differs
 
 const kBlue = Color(0xFF1D4ED8);
 const kBg = Color(0xFFF1F5F9);
@@ -6,17 +11,52 @@ const kInk = Color(0xFF0F172A);
 const kMuted = Color(0xFF475569);
 const kRed = Color(0xFFDC2626);
 
-const kZones = ['Main Stage', 'Gate A', 'East Toilet', 'Food Court', 'Parking', 'Backstage'];
+const kZones = ['Main Stage', 'Gate A', 'East Toilet', 'Food Court', 'Parking', 'Backstage']; // fallback only
 const kIssues = ['Power', 'Medical', 'Crowd', 'Security', 'Water', 'Other'];
 
 void _say(BuildContext context, String msg) {
   ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
 }
 
+// Value saved in tickets.category for each 2-Tap issue (confirm with Sadam)
+const kIssueCategory = {
+  'Power': 'power',
+  'Medical': 'medical',
+  'Crowd': 'crowd',
+  'Security': 'security',
+  'Water': 'water_sanitation',
+  'Other': 'other',
+};
+
+final _picker = ImagePicker();
+
+Future<XFile?> _pickPhoto() => _picker.pickImage(
+      source: kIsWeb ? ImageSource.gallery : ImageSource.camera,
+      maxWidth: 1280,
+      imageQuality: 80,
+    );
+
+Future<String?> _uploadPhoto(XFile? f, String eventId) async {
+  if (f == null) return null;
+  final bytes = await f.readAsBytes();
+  return TicketService().uploadFile(
+      'photos', '$eventId/${DateTime.now().millisecondsSinceEpoch}.jpg', bytes, 'image/jpeg');
+}
+
 class CrewHomeScreen extends StatelessWidget {
   final String name;
   final String role;
-  const CrewHomeScreen({super.key, this.name = 'Crew', this.role = 'Field Crew'});
+  final String eventId;
+  final String eventName;
+  final List<String> zones;
+  const CrewHomeScreen({
+    super.key,
+    required this.name,
+    required this.role,
+    required this.eventId,
+    required this.eventName,
+    required this.zones,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -29,7 +69,7 @@ class CrewHomeScreen extends StatelessWidget {
           title: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Campus Fest 2026', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 17)),
+              Text(eventName, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 17)),
               Text('$name · $role', style: const TextStyle(fontSize: 13, color: kMuted)),
             ],
           ),
@@ -39,31 +79,86 @@ class CrewHomeScreen extends StatelessWidget {
             tabs: [Tab(text: 'Voice'), Tab(text: '2-Tap')],
           ),
         ),
-        body: const TabBarView(children: [_VoiceTab(), _TwoTapTab()]),
+        body: TabBarView(children: [
+          _VoiceTab(eventId: eventId, name: name, zones: zones),
+          _TwoTapTab(eventId: eventId, name: name, zones: zones),
+        ]),
       ),
     );
   }
 }
 
 class _VoiceTab extends StatefulWidget {
-  const _VoiceTab();
+  final String eventId, name;
+  final List<String> zones;
+  const _VoiceTab({required this.eventId, required this.name, required this.zones});
   @override
   State<_VoiceTab> createState() => _VoiceTabState();
 }
 
 class _VoiceTabState extends State<_VoiceTab> {
+  final _rec = AudioRecorder();
   bool _recording = false;
-  String _zone = kZones.first;
+  bool _busy = false;
+  XFile? _photo;
+  late String _zone = widget.zones.first;
 
-  void _start() {
-    // TODO: start recording (package: record) + ask mic permission
-    setState(() => _recording = true);
+  @override
+  void dispose() {
+    _rec.dispose();
+    super.dispose();
   }
 
-  void _stop() {
-    // TODO: stop recording, upload audio, call Gemini, create ticket in Supabase
-    setState(() => _recording = false);
-    _say(context, 'Voice report captured (mock)');
+  Future<void> _start() async {
+    try {
+      if (!await _rec.hasPermission()) {
+        if (mounted) _say(context, 'Microphone permission is needed');
+        return;
+      }
+      final path = kIsWeb
+          ? ''
+          : '${(await getTemporaryDirectory()).path}/report_${DateTime.now().millisecondsSinceEpoch}.wav';
+      await _rec.start(const RecordConfig(encoder: AudioEncoder.wav), path: path);
+      if (mounted) setState(() => _recording = true);
+    } catch (e) {
+      if (mounted) _say(context, 'Cannot record: $e');
+    }
+  }
+
+  Future<void> _stop() async {
+    if (!_recording) return;
+    setState(() {
+      _recording = false;
+      _busy = true;
+    });
+    try {
+      final path = await _rec.stop();
+      if (path == null) throw 'No audio recorded';
+      final bytes = await XFile(path).readAsBytes();
+      final svc = TicketService();
+      final audioUrl = await svc.uploadFile(
+          'audio', '${widget.eventId}/${DateTime.now().millisecondsSinceEpoch}.wav', bytes, 'audio/wav');
+      final photoUrl = await _uploadPhoto(_photo, widget.eventId);
+      // NOTE: the selected zone is not sent; the AI reads it from the audio.
+      final res = await svc.processTicket(
+        eventId: widget.eventId,
+        reporterName: widget.name,
+        audioUrl: audioUrl,
+        photoUrl: photoUrl,
+      );
+      if (!mounted) return;
+      _say(context, 'Ticket created${res['category'] != null ? ': ${res['category']}' : ''}');
+      setState(() => _photo = null);
+    } catch (e) {
+      if (mounted) _say(context, 'Failed to send report: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _addPhoto() async {
+    final f = await _pickPhoto();
+    if (f != null && mounted) setState(() => _photo = f);
   }
 
   @override
@@ -75,7 +170,7 @@ class _VoiceTabState extends State<_VoiceTab> {
           DropdownButtonFormField<String>(
             initialValue: _zone,
             decoration: const InputDecoration(labelText: 'Zone', filled: true, fillColor: Colors.white),
-            items: [for (final z in kZones) DropdownMenuItem(value: z, child: Text(z))],
+            items: [for (final z in widget.zones) DropdownMenuItem(value: z, child: Text(z))],
             onChanged: (v) => setState(() => _zone = v ?? _zone),
           ),
           Expanded(
@@ -87,22 +182,22 @@ class _VoiceTabState extends State<_VoiceTab> {
                     button: true,
                     label: 'Hold to speak',
                     child: GestureDetector(
-                      onLongPressStart: (_) => _start(),
-                      onLongPressEnd: (_) => _stop(),
+                      onLongPressStart: _busy ? null : (_) => _start(),
+                      onLongPressEnd: _busy ? null : (_) => _stop(),
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 150),
                         width: _recording ? 220 : 200,
                         height: _recording ? 220 : 200,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          color: _recording ? kRed : kBlue,
+                          color: _busy ? kMuted : (_recording ? kRed : kBlue),
                         ),
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            const Icon(Icons.mic, color: Colors.white, size: 56),
+                            Icon(_busy ? Icons.hourglass_top : Icons.mic, color: Colors.white, size: 56),
                             const SizedBox(height: 8),
-                            Text(_recording ? 'Recording…' : 'Hold to speak',
+                            Text(_busy ? 'Sending…' : (_recording ? 'Recording…' : 'Hold to speak'),
                                 style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 17)),
                           ],
                         ),
@@ -119,10 +214,9 @@ class _VoiceTabState extends State<_VoiceTab> {
             width: double.infinity,
             height: 48,
             child: OutlinedButton.icon(
-              // TODO: image_picker
-              onPressed: () => _say(context, 'Photo picker coming soon'),
-              icon: const Icon(Icons.photo_camera_outlined),
-              label: const Text('Add photo (optional)'),
+              onPressed: _busy ? null : _addPhoto,
+              icon: Icon(_photo == null ? Icons.photo_camera_outlined : Icons.check_circle),
+              label: Text(_photo == null ? 'Add photo (optional)' : 'Photo attached (tap to change)'),
             ),
           ),
           const SizedBox(height: 16),
@@ -131,8 +225,8 @@ class _VoiceTabState extends State<_VoiceTab> {
             child: Text('YOUR RECENT REPORTS', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: kMuted)),
           ),
           const SizedBox(height: 8),
+          // TODO: load real reports (TicketService.streamTickets filtered by reporter)
           const _ReportRow('Generator down · Main Stage', 'In progress', kBlue),
-          const _ReportRow('Leaking toilet · East Toilet', 'Done', Color(0xFF047857)),
         ],
       ),
     );
@@ -157,7 +251,9 @@ class _ReportRow extends StatelessWidget {
 }
 
 class _TwoTapTab extends StatefulWidget {
-  const _TwoTapTab();
+  final String eventId, name;
+  final List<String> zones;
+  const _TwoTapTab({required this.eventId, required this.name, required this.zones});
   @override
   State<_TwoTapTab> createState() => _TwoTapTabState();
 }
@@ -166,19 +262,43 @@ class _TwoTapTabState extends State<_TwoTapTab> {
   String? _zone;
   String? _issue;
   bool _urgent = false;
+  bool _busy = false;
+  XFile? _photo;
 
-  void _send() {
+  Future<void> _send() async {
     if (_zone == null || _issue == null) {
       _say(context, 'Pick a zone and an issue first');
       return;
     }
-    // TODO: insert ticket into Supabase (category=_issue, zone=_zone, urgency)
-    _say(context, 'Ticket sent: $_issue at $_zone${_urgent ? ' (HIGH)' : ''} (mock)');
-    setState(() {
-      _zone = null;
-      _issue = null;
-      _urgent = false;
-    });
+    setState(() => _busy = true);
+    try {
+      final photoUrl = await _uploadPhoto(_photo, widget.eventId);
+      await TicketService().createTicket(
+        eventId: widget.eventId,
+        reporterName: widget.name,
+        photoUrl: photoUrl,
+        category: kIssueCategory[_issue],
+        zone: _zone,
+        urgency: _urgent ? 'high' : 'medium', // confirm allowed values with Sadam
+      );
+      if (!mounted) return;
+      _say(context, 'Ticket sent: $_issue at $_zone');
+      setState(() {
+        _zone = null;
+        _issue = null;
+        _urgent = false;
+        _photo = null;
+      });
+    } catch (e) {
+      if (mounted) _say(context, 'Failed to send ticket: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _addPhoto() async {
+    final f = await _pickPhoto();
+    if (f != null && mounted) setState(() => _photo = f);
   }
 
   Widget _grid(List<String> items, String? selected, ValueChanged<String> onTap) {
@@ -212,7 +332,7 @@ class _TwoTapTabState extends State<_TwoTapTab> {
       children: [
         const Text('1 · Where?', style: h),
         const SizedBox(height: 10),
-        _grid(kZones, _zone, (v) => setState(() => _zone = v)),
+        _grid(widget.zones, _zone, (v) => setState(() => _zone = v)),
         const SizedBox(height: 20),
         const Text('2 · What?', style: h),
         const SizedBox(height: 10),
@@ -228,13 +348,22 @@ class _TwoTapTabState extends State<_TwoTapTab> {
           selected: {_urgent},
           onSelectionChanged: (s) => setState(() => _urgent = s.first),
         ),
-        const SizedBox(height: 24),
+        const SizedBox(height: 20),
+        SizedBox(
+          height: 48,
+          child: OutlinedButton.icon(
+            onPressed: _busy ? null : _addPhoto,
+            icon: Icon(_photo == null ? Icons.photo_camera_outlined : Icons.check_circle),
+            label: Text(_photo == null ? 'Add photo (optional)' : 'Photo attached (tap to change)'),
+          ),
+        ),
+        const SizedBox(height: 12),
         SizedBox(
           height: 56,
           child: FilledButton(
             style: FilledButton.styleFrom(backgroundColor: kBlue),
-            onPressed: _send,
-            child: const Text('Send ticket', style: TextStyle(fontSize: 17)),
+            onPressed: _busy ? null : _send,
+            child: Text(_busy ? 'Sending…' : 'Send ticket', style: const TextStyle(fontSize: 17)),
           ),
         ),
       ],
