@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import 'csv_download.dart';
+import 'lpj_export.dart';
 
 // Batas waktu (SLA): tiket Incoming yang belum diambil > 3 menit akan kedip merah
 const slaLimit = Duration(minutes: 3);
@@ -32,7 +32,7 @@ class _CommandCenterScreenState extends State<CommandCenterScreen> {
   final supabase = Supabase.instance.client;
 
   late final Stream<List<Map<String, dynamic>>> ticketStream;
-  List<Map<String, dynamic>> tickets = []; // data terakhir, dipakai buat export CSV
+  List<Map<String, dynamic>> tickets = []; // data terakhir, dipakai buat export Excel
   Map<String, String> divisionNames = {}; // division_id -> nama divisi
   Map<String, String> reviewChoices = {}; // ticket_id -> divisi yang dipilih koordinator
 
@@ -48,7 +48,7 @@ class _CommandCenterScreenState extends State<CommandCenterScreen> {
         .from('tickets')
         .stream(primaryKey: ['id'])
         .eq('event_id', widget.eventId)
-        .order('created_at');
+        .order('created_at', ascending: true);
 
     loadDivisions();
 
@@ -64,7 +64,7 @@ class _CommandCenterScreenState extends State<CommandCenterScreen> {
     super.dispose();
   }
 
-    Future<void> loadDivisions() async {
+  Future<void> loadDivisions() async {
     try {
       final data = await supabase
           .from('divisions')
@@ -93,6 +93,7 @@ class _CommandCenterScreenState extends State<CommandCenterScreen> {
   void takeTask(Map<String, dynamic> ticket) {
     updateTicket(ticket['id'], {
       'status': 'in_progress',
+      'taken_by': 'Koordinator (Web)',
       'taken_at': DateTime.now().toUtc().toIso8601String(),
     });
   }
@@ -109,8 +110,6 @@ class _CommandCenterScreenState extends State<CommandCenterScreen> {
     updateTicket(ticket['id'], {
       'status': 'incoming',
       'division_id': divisionId,
-      // Waktu SLA dihitung dari saat tiket masuk Incoming
-      'incoming_at': DateTime.now().toUtc().toIso8601String(),
     });
   }
 
@@ -119,7 +118,7 @@ class _CommandCenterScreenState extends State<CommandCenterScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
-    // ---------- Helper waktu ----------
+  // ---------- Helper waktu ----------
 
   DateTime? parseTime(dynamic value) {
     if (value == null) return null;
@@ -132,9 +131,15 @@ class _CommandCenterScreenState extends State<CommandCenterScreen> {
     return '${minutes}m ${seconds}s';
   }
 
-  // Jam tiket masuk kolom Incoming (kalau kosong, pakai jam lapor)
+  // Ubah waktu jadi teks "2026-11-26 11:19:24" (jam lokal, tanpa milidetik)
+  String formatDateTime(DateTime? time) {
+    if (time == null) return '';
+    return time.toLocal().toString().substring(0, 19);
+  }
+
+  // Waktu SLA dihitung dari jam relawan lapor
   DateTime? incomingTime(Map<String, dynamic> ticket) {
-    return parseTime(ticket['incoming_at']) ?? parseTime(ticket['created_at']);
+    return parseTime(ticket['created_at']);
   }
 
   bool isOverSla(Map<String, dynamic> ticket) {
@@ -144,9 +149,9 @@ class _CommandCenterScreenState extends State<CommandCenterScreen> {
     return DateTime.now().difference(start) > slaLimit;
   }
 
-  // ---------- Export CSV / LPJ ----------
+  // ---------- Export Excel / LPJ ----------
 
-  void exportCsv() {
+  void exportExcel() {
     if (tickets.isEmpty) {
       showMessage('Belum ada tiket untuk di-export');
       return;
@@ -156,12 +161,14 @@ class _CommandCenterScreenState extends State<CommandCenterScreen> {
       [
         'No',
         'Waktu Lapor',
-        'Deskripsi',
+        'Pelapor',
+        'Laporan',
         'Kategori',
-        'Lokasi',
+        'Zona',
         'Urgensi',
         'Divisi',
         'Status',
+        'Diambil Oleh',
         'Waktu Diambil',
         'Waktu Selesai',
         'Lama Penanganan (menit)',
@@ -181,38 +188,26 @@ class _CommandCenterScreenState extends State<CommandCenterScreen> {
 
       rows.add([
         '${i + 1}',
-        created?.toLocal().toString() ?? '',
-        t['description']?.toString() ?? '',
+        formatDateTime(created),
+        t['reporter_name']?.toString() ?? '',
+        t['transcript']?.toString() ?? '',
         t['category']?.toString() ?? '',
-        t['location']?.toString() ?? '',
+        t['zone']?.toString() ?? '',
         t['urgency']?.toString() ?? '',
         divisionNames[t['division_id']?.toString()] ?? '',
         t['status']?.toString() ?? '',
-        taken?.toLocal().toString() ?? '',
-        done?.toLocal().toString() ?? '',
+        t['taken_by']?.toString() ?? '',
+        formatDateTime(taken),
+        formatDateTime(done),
         handlingMinutes,
       ]);
     }
 
-    final csv = rows.map((row) => row.map(csvCell).join(',')).join('\n');
     final safeName = widget.eventName.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_');
-    downloadCsv('LPJ_$safeName.csv', csv);
+    downloadXlsx('LPJ_$safeName.xlsx', rows);
   }
 
-  // Bungkus isi sel pakai tanda kutip biar koma di dalam teks nggak bikin kolom geser.
-  // Teks yang diawali = + - @ dikasih tanda ' supaya Excel nggak menganggapnya rumus.
-  String csvCell(String value) {
-    var text = value;
-    if (text.startsWith('=') ||
-        text.startsWith('+') ||
-        text.startsWith('-') ||
-        text.startsWith('@')) {
-      text = "'$text";
-    }
-    return '"${text.replaceAll('"', '""')}"';
-  }
-
-    // ---------- Tampilan ----------
+  // ---------- Tampilan ----------
 
   @override
   Widget build(BuildContext context) {
@@ -226,8 +221,8 @@ class _CommandCenterScreenState extends State<CommandCenterScreen> {
               padding: const EdgeInsets.only(right: 16),
               child: FilledButton.icon(
                 icon: const Icon(Icons.download),
-                label: const Text('Export CSV / LPJ'),
-                onPressed: exportCsv,
+                label: const Text('Export Excel / LPJ'),
+                onPressed: exportExcel,
               ),
             ),
           ],
@@ -313,7 +308,7 @@ class _CommandCenterScreenState extends State<CommandCenterScreen> {
     );
   }
 
-    Widget buildTicketCard(Map<String, dynamic> ticket) {
+  Widget buildTicketCard(Map<String, dynamic> ticket) {
     final status = ticket['status'];
     final overSla = isOverSla(ticket);
     final start = incomingTime(ticket);
@@ -344,7 +339,7 @@ class _CommandCenterScreenState extends State<CommandCenterScreen> {
                 style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
               ),
             Text(
-              ticket['description']?.toString() ?? '-',
+              ticket['transcript']?.toString() ?? '-',
               style: const TextStyle(fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 6),
@@ -353,9 +348,10 @@ class _CommandCenterScreenState extends State<CommandCenterScreen> {
               runSpacing: 4,
               children: [
                 buildChip(Icons.category, ticket['category']),
-                buildChip(Icons.place, ticket['location']),
+                buildChip(Icons.place, ticket['zone']),
                 buildChip(Icons.priority_high, ticket['urgency']),
                 buildChip(Icons.groups, divisionNames[ticket['division_id']?.toString()]),
+                buildChip(Icons.person, ticket['reporter_name']),
               ],
             ),
             const SizedBox(height: 6),
@@ -426,13 +422,13 @@ class _CommandCenterScreenState extends State<CommandCenterScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    ticket['description']?.toString() ?? '-',
+                    ticket['transcript']?.toString() ?? '-',
                     style: const TextStyle(fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 4),
                   Text(
                     'Kategori: ${ticket['category'] ?? '-'}  |  '
-                    'Lokasi: ${ticket['location'] ?? '-'}  |  '
+                    'Zona: ${ticket['zone'] ?? '-'}  |  '
                     'Urgensi: ${ticket['urgency'] ?? '-'}',
                   ),
                 ],
