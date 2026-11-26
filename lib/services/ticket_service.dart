@@ -36,6 +36,22 @@ class TicketService {
     });
   }
 
+  // Kirim audio yang sudah diupload ke Edge Function; hasilnya tiket jadi
+  Future<Map<String, dynamic>> processTicket({
+    required String eventId,
+    required String reporterName,
+    required String audioUrl,
+    String? photoUrl,
+  }) async {
+    final res = await _db.functions.invoke('process-ticket', body: {
+      'event_id': eventId,
+      'reporter_name': reporterName,
+      'audio_url': audioUrl,
+      'photo_url': photoUrl,
+    });
+    return Map<String, dynamic>.from(res.data as Map);
+  }
+
   // Stream realtime untuk board
   Stream<List<Map<String, dynamic>>> streamTickets(String eventId) {
     return _db
