@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'crew_home_screen.dart';
-
-const kRoles = ['Field Crew', 'Technical', 'Medical', 'Security', 'Logistics', 'Coordinator'];
+import 'role_screen.dart';
 
 class JoinScreen extends StatefulWidget {
   const JoinScreen({super.key});
@@ -13,7 +12,6 @@ class JoinScreen extends StatefulWidget {
 class _JoinScreenState extends State<JoinScreen> {
   final _name = TextEditingController();
   final _code = TextEditingController();
-  String _role = kRoles.first;
   bool _busy = false;
 
   @override
@@ -23,7 +21,7 @@ class _JoinScreenState extends State<JoinScreen> {
     super.dispose();
   }
 
-  Future<void> _join() async {
+  Future<void> _next() async {
     final msg = ScaffoldMessenger.of(context);
     final code = _code.text.trim();
     if (_name.text.trim().isEmpty || code.isEmpty) {
@@ -40,10 +38,9 @@ class _JoinScreenState extends State<JoinScreen> {
         return;
       }
       final zones = List<String>.from(ev['zones'] ?? <String>[]);
-      Navigator.of(context).pushReplacement(MaterialPageRoute(
-        builder: (_) => CrewHomeScreen(
+      Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => RoleScreen(
           name: _name.text.trim(),
-          role: _role,
           eventId: code,
           eventName: ev['name'] as String? ?? 'Event',
           zones: zones.isEmpty ? kZones : zones,
@@ -75,9 +72,11 @@ class _JoinScreenState extends State<JoinScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('JOIN AN EVENT', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: kMuted)),
+                      Text('STEP 1 OF 2', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: kMuted)),
                       SizedBox(height: 4),
-                      Text('Scan the QR or enter the code', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+                      Text('Join an event', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+                      SizedBox(height: 4),
+                      Text('Scan the QR or enter the event code.', style: TextStyle(fontSize: 14, color: kMuted)),
                     ],
                   ),
                 ),
@@ -106,37 +105,14 @@ class _JoinScreenState extends State<JoinScreen> {
                 decoration: const InputDecoration(
                     labelText: 'Your name', filled: true, fillColor: Colors.white, border: OutlineInputBorder()),
               ),
-              const SizedBox(height: 18),
-              const Text('Your role', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 10,
-                runSpacing: 10,
-                children: [
-                  for (final r in kRoles)
-                    SizedBox(
-                      width: 150,
-                      height: 52,
-                      child: _role == r
-                          ? FilledButton(
-                              style: FilledButton.styleFrom(backgroundColor: kBlue),
-                              onPressed: () => setState(() => _role = r),
-                              child: Text(r))
-                          : OutlinedButton(
-                              style: OutlinedButton.styleFrom(backgroundColor: Colors.white, foregroundColor: kInk),
-                              onPressed: () => setState(() => _role = r),
-                              child: Text(r)),
-                    ),
-                ],
-              ),
               const SizedBox(height: 24),
               SizedBox(
                 width: double.infinity,
                 height: 52,
                 child: FilledButton(
                   style: FilledButton.styleFrom(backgroundColor: kBlue),
-                  onPressed: _busy ? null : _join,
-                  child: Text(_busy ? 'Joining…' : 'Join event', style: const TextStyle(fontSize: 16)),
+                  onPressed: _busy ? null : _next,
+                  child: Text(_busy ? 'Checking…' : 'Continue', style: const TextStyle(fontSize: 16)),
                 ),
               ),
             ],
