@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../services/ticket_service.dart';
 import 'lpj_export.dart';
 
 // Batas waktu (SLA): tiket Incoming yang belum diambil > 3 menit akan kedip merah
@@ -30,6 +31,7 @@ class CommandCenterScreen extends StatefulWidget {
 
 class _CommandCenterScreenState extends State<CommandCenterScreen> {
   final supabase = Supabase.instance.client;
+  final ticketService = TicketService();
 
   late final Stream<List<Map<String, dynamic>>> ticketStream;
   List<Map<String, dynamic>> tickets = []; // data terakhir, dipakai buat export Excel
@@ -44,11 +46,7 @@ class _CommandCenterScreenState extends State<CommandCenterScreen> {
     super.initState();
 
     // Stream realtime: otomatis update kalau ada tiket baru / berubah
-    ticketStream = supabase
-        .from('tickets')
-        .stream(primaryKey: ['id'])
-        .eq('event_id', widget.eventId)
-        .order('created_at', ascending: true);
+    ticketStream = ticketService.streamTickets(widget.eventId);
 
     loadDivisions();
 
@@ -90,19 +88,20 @@ class _CommandCenterScreenState extends State<CommandCenterScreen> {
     }
   }
 
-  void takeTask(Map<String, dynamic> ticket) {
-    updateTicket(ticket['id'], {
-      'status': 'in_progress',
-      'taken_by': 'Koordinator (Web)',
-      'taken_at': DateTime.now().toUtc().toIso8601String(),
-    });
+  Future<void> takeTask(Map<String, dynamic> ticket) async {
+    try {
+      await ticketService.takeTicket(ticket['id'].toString(), 'Koordinator (Web)');
+    } catch (e) {
+      showMessage('Gagal mengambil tugas: $e');
+    }
   }
 
-  void markDone(Map<String, dynamic> ticket) {
-    updateTicket(ticket['id'], {
-      'status': 'done',
-      'done_at': DateTime.now().toUtc().toIso8601String(),
-    });
+  Future<void> markDone(Map<String, dynamic> ticket) async {
+    try {
+      await ticketService.doneTicket(ticket['id'].toString());
+    } catch (e) {
+      showMessage('Gagal menyelesaikan tugas: $e');
+    }
   }
 
   // Koordinator pilih divisi, lalu tiket dikirim ke kolom Incoming
@@ -243,7 +242,9 @@ class _CommandCenterScreenState extends State<CommandCenterScreen> {
               return const Center(child: CircularProgressIndicator());
             }
 
-            tickets = snapshot.data!;
+            // Urutkan dari yang paling lama dilaporkan
+            tickets = [...snapshot.data!]
+              ..sort((a, b) => a['created_at'].toString().compareTo(b['created_at'].toString()));
 
             return TabBarView(
               children: [
