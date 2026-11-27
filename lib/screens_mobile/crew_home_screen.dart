@@ -147,7 +147,11 @@ class _VoiceTabState extends State<_VoiceTab> {
       final path = kIsWeb
           ? ''
           : '${(await getTemporaryDirectory()).path}/report_${DateTime.now().millisecondsSinceEpoch}.wav';
-      await _rec.start(const RecordConfig(encoder: AudioEncoder.wav), path: path);
+      // 16 kHz mono: file kecil, cepat di-upload, cukup jelas buat AI
+      await _rec.start(
+        const RecordConfig(encoder: AudioEncoder.wav, sampleRate: 16000, numChannels: 1),
+        path: path,
+      );
       if (mounted) setState(() => _recording = true);
     } catch (e) {
       if (mounted) _say(context, 'Cannot record: $e');
@@ -178,6 +182,11 @@ class _VoiceTabState extends State<_VoiceTab> {
       if (!mounted) return;
       _say(context, 'Ticket created${res['category'] != null ? ': ${res['category']}' : ''}');
       setState(() => _photo = null);
+    } on FunctionException catch (e) {
+      // Tampilkan pesan error asli dari Edge Function (misal: Gemini gagal -> ...)
+      final details = e.details;
+      final msg = details is Map ? details['error'] : details;
+      if (mounted) _say(context, 'AI error (${e.status}): ${msg ?? e.reasonPhrase}');
     } catch (e) {
       if (mounted) _say(context, 'Failed to send report: $e');
     } finally {
