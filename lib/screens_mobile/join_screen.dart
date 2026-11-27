@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'crew_home_screen.dart';
 
-const kRoles = ['Field Crew', 'Technical', 'Medical', 'Security', 'Logistics', 'Coordinator'];
+// Same names as the divisions in Setup Event
+const kRoles = ['Relawan', 'Teknis', 'Medis', 'Keamanan', 'Logistik', 'Koordinator'];
 
 class JoinScreen extends StatefulWidget {
   const JoinScreen({super.key});
@@ -56,6 +58,17 @@ class _JoinScreenState extends State<JoinScreen> {
     }
   }
 
+  // Open the camera, read the QR from Setup Event, put the code in the box
+  Future<void> _scanQr() async {
+    final code = await Navigator.of(context).push<String>(
+      MaterialPageRoute(builder: (_) => const _ScanPage()),
+    );
+    if (code == null || !mounted) return;
+    setState(() => _code.text = code);
+    // Name already filled in? Join right away
+    if (_name.text.trim().isNotEmpty) _join();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -87,9 +100,7 @@ class _JoinScreenState extends State<JoinScreen> {
                 width: double.infinity,
                 height: 48,
                 child: OutlinedButton.icon(
-                  // TODO: open scanner (package: mobile_scanner)
-                  onPressed: () => ScaffoldMessenger.of(context)
-                      .showSnackBar(const SnackBar(content: Text('QR scanner coming soon'))),
+                  onPressed: _busy ? null : _scanQr,
                   icon: const Icon(Icons.qr_code_scanner),
                   label: const Text('Scan QR code'),
                 ),
@@ -143,6 +154,33 @@ class _JoinScreenState extends State<JoinScreen> {
           ),
         ),
       ),
+    );
+  }
+}
+
+// Full-screen camera that closes as soon as a QR code is read
+class _ScanPage extends StatefulWidget {
+  const _ScanPage();
+  @override
+  State<_ScanPage> createState() => _ScanPageState();
+}
+
+class _ScanPageState extends State<_ScanPage> {
+  bool _done = false; // the camera can read the same QR many times per second
+
+  void _onDetect(BarcodeCapture capture) {
+    if (_done || capture.barcodes.isEmpty) return;
+    final value = capture.barcodes.first.rawValue;
+    if (value == null || value.isEmpty) return;
+    _done = true;
+    Navigator.of(context).pop(value.trim());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Scan event QR')),
+      body: MobileScanner(onDetect: _onDetect),
     );
   }
 }
