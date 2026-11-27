@@ -432,6 +432,13 @@ class _CommandCenterScreenState extends State<CommandCenterScreen> {
               style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
             ),
             buildTranscript(ticket['transcript']),
+            Text(
+              '${ticket['category'] ?? 'Laporan'} · ${ticket['zone'] ?? '-'}',
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+            ),
+            buildTranscript(ticket['transcript']),
+            _buildTicketPhoto(context, ticket), // <-- TAMBAHKAN DI SINI
+            const SizedBox(height: 6),
             const SizedBox(height: 6),
             Wrap(
               spacing: 6,
@@ -574,6 +581,12 @@ class _CommandCenterScreenState extends State<CommandCenterScreen> {
           style: const TextStyle(fontWeight: FontWeight.bold),
         ),
         buildTranscript(ticket['transcript']),
+        Text(
+          '${ticket['category'] ?? 'Laporan'} · ${ticket['zone'] ?? '-'}',
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
+        buildTranscript(ticket['transcript']),
+        _buildTicketPhoto(context, ticket), // <-- TAMBAHKAN DI SINI
       ],
     );
 
@@ -624,4 +637,41 @@ class _CommandCenterScreenState extends State<CommandCenterScreen> {
       ),
     );
   }
+  Widget _buildTicketPhoto(BuildContext context, Map<String, dynamic> ticket) {
+  final rawUrl = ticket['photo_url'] ?? ticket['image_url'];
+  final photoUrl = rawUrl?.toString().trim();
+
+  if (photoUrl == null || photoUrl.isEmpty) {
+    return const SizedBox.shrink();
+  }
+
+  return Padding(
+    padding: const EdgeInsets.only(top: 8),
+    child: InkWell(
+      onTap: () {
+        showDialog(
+          context: context,
+          builder: (_) => Dialog(
+            child: InteractiveViewer(
+              child: Image.network(photoUrl, fit: BoxFit.contain),
+            ),
+          ),
+        );
+      },
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: Image.network(
+          photoUrl,
+          height: 140,
+          width: double.infinity,
+          fit: BoxFit.cover,
+          errorBuilder: (context, error, stackTrace) => Text(
+            'Gagal memuat foto',
+            style: TextStyle(color: Colors.red.shade700, fontSize: 12),
+          ),
+        ),
+      ),
+    ),
+  );
+}
 }
