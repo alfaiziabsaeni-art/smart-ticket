@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/ticket_service.dart'; // adjust if your file name differs
 
 const kBlue = Color(0xFF1D4ED8);
@@ -10,6 +11,8 @@ const kBg = Color(0xFFF1F5F9);
 const kInk = Color(0xFF0F172A);
 const kMuted = Color(0xFF475569);
 const kRed = Color(0xFFDC2626);
+const kYellow = Color(0xFFD97706);
+const kGreen = Color(0xFF059669);
 
 const kZones = ['Main Stage', 'Gate A', 'East Toilet', 'Food Court', 'Parking', 'Backstage']; // fallback only
 const kIssues = ['Power', 'Medical', 'Crowd', 'Security', 'Water', 'Other'];
@@ -18,15 +21,41 @@ void _say(BuildContext context, String msg) {
   ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
 }
 
-// Value saved in tickets.category for each 2-Tap issue (confirm with Sadam)
+// Value saved in tickets.category for each 2-Tap issue.
+// Same categories as the AI (Edge Function process-ticket).
 const kIssueCategory = {
-  'Power': 'power',
-  'Medical': 'medical',
-  'Crowd': 'crowd',
-  'Security': 'security',
-  'Water': 'water_sanitation',
-  'Other': 'other',
+  'Power': 'Listrik',
+  'Medical': 'Medis',
+  'Crowd': 'Keamanan',
+  'Security': 'Keamanan',
+  'Water': 'Kebersihan',
+  'Other': 'Lainnya',
 };
+
+// Category -> division name. Same mapping as CATEGORY_TO_DIVISION in the Edge Function.
+const kCategoryToDivision = {
+  'Listrik': 'Teknis',
+  'Medis': 'Medis',
+  'Keamanan': 'Keamanan',
+  'Logistik': 'Logistik',
+  'Kebersihan': 'Logistik',
+};
+
+// Find the division id for a category in this event (null if there is no matching division)
+Future<String?> _findDivisionId(String eventId, String? category) async {
+  final divisionName = kCategoryToDivision[category];
+  if (divisionName == null) return null;
+  final divisions = await Supabase.instance.client
+      .from('divisions')
+      .select('id, name')
+      .eq('event_id', eventId);
+  for (final d in divisions) {
+    if (d['name'].toString().toLowerCase() == divisionName.toLowerCase()) {
+      return d['id'].toString();
+    }
+  }
+  return null;
+}
 
 final _picker = ImagePicker();
 
@@ -225,10 +254,66 @@ class _VoiceTabState extends State<_VoiceTab> {
             child: Text('YOUR RECENT REPORTS', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: kMuted)),
           ),
           const SizedBox(height: 8),
-          // TODO: load real reports (TicketService.streamTickets filtered by reporter)
-          const _ReportRow('Generator down · Main Stage', 'In progress', kBlue),
+          _MyReports(eventId: widget.eventId, name: widget.name),
         ],
       ),
+    );
+  }
+}
+
+// The 2 latest tickets sent by this volunteer, updated in realtime
+class _MyReports extends StatefulWidget {
+  final String eventId, name;
+  const _MyReports({required this.eventId, required this.name});
+  @override
+  State<_MyReports> createState() => _MyReportsState();
+}
+
+class _MyReportsState extends State<_MyReports> {
+  late final Stream<List<Map<String, dynamic>>> _stream =
+      TicketService().streamTickets(widget.eventId);
+
+  // Status in the database -> text and color shown to the volunteer
+  static const _statusText = {
+    'review': 'In review',
+    'incoming': 'Waiting',
+    'in_progress': 'In progress',
+    'done': 'Done',
+  };
+  static const _statusColor = {
+    'review': kYellow,
+    'incoming': kYellow,
+    'in_progress': kBlue,
+    'done': kGreen,
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<List<Map<String, dynamic>>>(
+      stream: _stream,
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return const Text('Loading…', style: TextStyle(color: kMuted));
+        }
+        // streamTickets is sorted newest first, so take(2) = the 2 latest (more rows overflow small phones)
+        final mine = snapshot.data!
+            .where((t) => t['reporter_name'] == widget.name)
+            .take(2)
+            .toList();
+        if (mine.isEmpty) {
+          return const Text('No reports yet', style: TextStyle(color: kMuted));
+        }
+        return Column(
+          children: [
+            for (final t in mine)
+              _ReportRow(
+                '${t['category'] ?? 'Report'} · ${t['zone'] ?? '-'}',
+                _statusText[t['status']] ?? t['status'].toString(),
+                _statusColor[t['status']] ?? kMuted,
+              ),
+          ],
+        );
+      },
     );
   }
 }
@@ -273,13 +358,16 @@ class _TwoTapTabState extends State<_TwoTapTab> {
     setState(() => _busy = true);
     try {
       final photoUrl = await _uploadPhoto(_photo, widget.eventId);
+      final category = kIssueCategory[_issue];
+      final divisionId = await _findDivisionId(widget.eventId, category);
       await TicketService().createTicket(
         eventId: widget.eventId,
         reporterName: widget.name,
         photoUrl: photoUrl,
-        category: kIssueCategory[_issue],
+        category: category,
         zone: _zone,
-        urgency: _urgent ? 'high' : 'medium', // confirm allowed values with Sadam
+        urgency: _urgent ? 'high' : 'medium',
+        divisionId: divisionId,
       );
       if (!mounted) return;
       _say(context, 'Ticket sent: $_issue at $_zone');

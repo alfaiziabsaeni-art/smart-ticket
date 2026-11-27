@@ -24,6 +24,7 @@ class TicketService {
     String? category,
     String? zone,
     String? urgency,
+    String? divisionId,
   }) async {
     await _db.from('tickets').insert({
       'event_id': eventId,
@@ -33,6 +34,7 @@ class TicketService {
       'category': category,
       'zone': zone,
       'urgency': urgency,
+      'division_id': divisionId,
     });
   }
 
