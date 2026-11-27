@@ -4,6 +4,13 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'command_center_screen.dart';
 
+// Divisions added automatically to every new event.
+// Same names as the Edge Function (AI auto-dispatch), so there are no typos.
+const defaultDivisions = ['Teknis', 'Medis', 'Keamanan', 'Logistik'];
+
+// Address of the deployed web app. The QR opens this link with the event code.
+const appUrl = 'https://smart-ticket-4naga.web.app';
+
 // Halaman Setup Event untuk Ketua Panitia:
 // 1. Bikin event (kalau belum ada)
 // 2. Tambah / hapus divisi
@@ -87,13 +94,18 @@ class _SetupEventScreenState extends State<SetupEventScreen> {
     try {
       final data =
           await supabase.from('events').insert({'name': name}).select().single();
+      // Add the 4 default divisions to the new event
+      await supabase.from('divisions').insert([
+        for (final division in defaultDivisions)
+          {'event_id': data['id'], 'name': division},
+      ]);
       if (!mounted) return;
       setState(() {
         event = data;
-        divisions = [];
         zones = [];
       });
       eventNameController.clear();
+      await loadDivisionsAndZones();
     } catch (e) {
       showMessage('Gagal membuat event: $e');
     }
@@ -161,33 +173,44 @@ class _SetupEventScreenState extends State<SetupEventScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
+  void openCommandCenter() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => CommandCenterScreen(
+          eventId: event!['id'].toString(),
+          eventName: event!['name'].toString(),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (loading) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
+    final isNarrow = MediaQuery.sizeOf(context).width < narrowWidth;
+
     return Scaffold(
       appBar: AppBar(
         title: Text(event == null ? 'Setup Event' : 'Setup: ${event!['name']}'),
         actions: [
-          if (event != null)
+          // On a phone: icon only, so the title still fits
+          if (event != null && isNarrow)
+            IconButton(
+              icon: const Icon(Icons.dashboard),
+              tooltip: 'Buka Command Center',
+              onPressed: openCommandCenter,
+            ),
+          if (event != null && !isNarrow)
             Padding(
               padding: const EdgeInsets.only(right: 16),
               child: FilledButton.icon(
                 icon: const Icon(Icons.dashboard),
                 label: const Text('Buka Command Center'),
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => CommandCenterScreen(
-                        eventId: event!['id'].toString(),
-                        eventName: event!['name'].toString(),
-                      ),
-                    ),
-                  );
-                },
+                onPressed: openCommandCenter,
               ),
             ),
         ],
@@ -199,8 +222,9 @@ class _SetupEventScreenState extends State<SetupEventScreen> {
   // Tampilan kalau belum ada event sama sekali
   Widget buildCreateEventForm() {
     return Center(
-      child: SizedBox(
-        width: 400,
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 400),
+        padding: const EdgeInsets.all(16),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -231,38 +255,46 @@ class _SetupEventScreenState extends State<SetupEventScreen> {
     );
   }
 
-  // Tampilan setelah event ada: 3 kolom (Divisi | Zona | QR Code)
+  // Tampilan setelah event ada: 3 kolom (Divisi | Zona | QR Code).
+  // Di HP: 3 kartu disusun ke bawah dan bisa di-scroll.
   Widget buildSetupContent() {
+    final divisionCard = buildListCard(
+      title: 'Divisi',
+      hint: 'Nama divisi (misal: Keamanan)',
+      icon: Icons.groups,
+      controller: divisionController,
+      names: [for (final d in divisions) d['name'].toString()],
+      onAdd: addDivision,
+      onDelete: deleteDivision,
+    );
+    final zoneCard = buildListCard(
+      title: 'Zona Venue',
+      hint: 'Nama zona (misal: Gate A)',
+      icon: Icons.place,
+      controller: zoneController,
+      names: zones,
+      onAdd: addZone,
+      onDelete: deleteZone,
+    );
+    final qrCard = buildQrCard();
+
+    if (MediaQuery.sizeOf(context).width < narrowWidth) {
+      return ListView(
+        padding: const EdgeInsets.all(12),
+        children: [qrCard, divisionCard, zoneCard],
+      );
+    }
+
     return Padding(
       padding: const EdgeInsets.all(16),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(
-            child: buildListCard(
-              title: 'Divisi',
-              hint: 'Nama divisi (misal: Keamanan)',
-              icon: Icons.groups,
-              controller: divisionController,
-              names: [for (final d in divisions) d['name'].toString()],
-              onAdd: addDivision,
-              onDelete: deleteDivision,
-            ),
-          ),
+          Expanded(child: divisionCard),
           const SizedBox(width: 16),
-          Expanded(
-            child: buildListCard(
-              title: 'Zona Venue',
-              hint: 'Nama zona (misal: Gate A)',
-              icon: Icons.place,
-              controller: zoneController,
-              names: zones,
-              onAdd: addZone,
-              onDelete: deleteZone,
-            ),
-          ),
+          Expanded(child: zoneCard),
           const SizedBox(width: 16),
-          Expanded(child: buildQrCard()),
+          Expanded(child: qrCard),
         ],
       ),
     );
@@ -327,6 +359,8 @@ class _SetupEventScreenState extends State<SetupEventScreen> {
 
   Widget buildQrCard() {
     final eventId = event!['id'].toString();
+    // Scan with the phone's normal camera -> browser opens Join with the code filled in
+    final joinLink = '$appUrl/?code=$eventId';
 
     return Card(
       child: Padding(
@@ -338,18 +372,26 @@ class _SetupEventScreenState extends State<SetupEventScreen> {
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 4),
-            const Text('Relawan scan QR ini dari aplikasi mobile'),
+            const Text(
+              'Relawan scan QR ini pakai kamera HP',
+              textAlign: TextAlign.center,
+            ),
             const SizedBox(height: 16),
-            // Isi QR = event id. Aplikasi mobile (Rafi) tinggal baca id ini.
             QrImageView(
-              data: eventId,
+              data: joinLink,
               version: QrVersions.auto,
               size: 220,
               backgroundColor: Colors.white,
             ),
             const SizedBox(height: 8),
             SelectableText(
-              'ID: $eventId',
+              joinLink,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+            SelectableText(
+              'Kode event: $eventId',
+              textAlign: TextAlign.center,
               style: const TextStyle(fontSize: 12, color: Colors.grey),
             ),
           ],

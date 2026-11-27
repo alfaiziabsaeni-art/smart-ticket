@@ -366,7 +366,7 @@ class _TwoTapTabState extends State<_TwoTapTab> {
         photoUrl: photoUrl,
         category: category,
         zone: _zone,
-        urgency: _urgent ? 'high' : 'medium',
+        urgency: _urgent ? 'high' : 'low', // shown as CRITICAL / NORMAL in Command Center
         divisionId: divisionId,
       );
       if (!mounted) return;
