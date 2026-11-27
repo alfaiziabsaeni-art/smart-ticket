@@ -1,8 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../screens_web/setup_event_screen.dart';
 import 'crew_home_screen.dart';
 import 'role_screen.dart';
+
+// The QR from Setup Event is a link like https://.../?code=EVENT_ID.
+// Take the code out of the link (or keep the text as it is if it is only the code).
+String codeFromQr(String value) {
+  final uri = Uri.tryParse(value.trim());
+  return uri?.queryParameters['code'] ?? value.trim();
+}
 
 class JoinScreen extends StatefulWidget {
   const JoinScreen({super.key});
@@ -14,6 +22,14 @@ class _JoinScreenState extends State<JoinScreen> {
   final _name = TextEditingController();
   final _code = TextEditingController();
   bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Opened from the QR link (?code=...)? Fill in the event code automatically
+    final code = Uri.base.queryParameters['code'];
+    if (code != null) _code.text = code;
+  }
 
   @override
   void dispose() {
@@ -60,7 +76,7 @@ class _JoinScreenState extends State<JoinScreen> {
       MaterialPageRoute(builder: (_) => const _ScanPage()),
     );
     if (code == null || !mounted) return;
-    setState(() => _code.text = code);
+    setState(() => _code.text = codeFromQr(code));
     // Name already filled in? Go to the next step right away
     if (_name.text.trim().isNotEmpty) _next();
   }
@@ -123,6 +139,17 @@ class _JoinScreenState extends State<JoinScreen> {
                   style: FilledButton.styleFrom(backgroundColor: kBlue),
                   onPressed: _busy ? null : _next,
                   child: Text(_busy ? 'Checking…' : 'Continue', style: const TextStyle(fontSize: 16)),
+                ),
+              ),
+              const SizedBox(height: 12),
+              // Committee on a phone can still open Setup Event & Command Center
+              Center(
+                child: TextButton.icon(
+                  icon: const Icon(Icons.dashboard),
+                  label: const Text('Panitia? Buka Setup Event & Command Center'),
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const SetupEventScreen()),
+                  ),
                 ),
               ),
             ],

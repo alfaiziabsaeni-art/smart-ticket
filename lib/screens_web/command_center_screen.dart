@@ -9,6 +9,14 @@ import 'lpj_export.dart';
 // Batas waktu (SLA): tiket Incoming yang belum diambil > 3 menit akan kedip merah
 const slaLimit = Duration(minutes: 3);
 
+// Urgency from the AI / 2-Tap ('low', 'medium', 'high') -> badge text, color, sort order
+const urgencyLabel = {'high': 'CRITICAL', 'medium': 'HIGH', 'low': 'NORMAL'};
+const urgencyColor = {'high': Colors.red, 'medium': Colors.orange, 'low': Colors.blueGrey};
+const urgencyRank = {'high': 0, 'medium': 1, 'low': 2};
+
+// Screens narrower than this (phones) get the phone layout
+const narrowWidth = 700.0;
+
 // Status tiket yang dipakai di tabel 'tickets':
 // 'review'      -> masuk Coordinator Review Queue (AI ragu / belum ada divisi)
 // 'incoming'    -> sudah dikirim ke divisi, belum diambil
@@ -40,6 +48,7 @@ class _CommandCenterScreenState extends State<CommandCenterScreen> {
 
   Timer? blinkTimer;
   bool blinkOn = false;
+  int phoneColumn = 0; // on a phone: which column is shown (0 Incoming, 1 Progress, 2 Done)
 
   @override
   void initState() {
@@ -192,7 +201,7 @@ class _CommandCenterScreenState extends State<CommandCenterScreen> {
         t['transcript']?.toString() ?? '',
         t['category']?.toString() ?? '',
         t['zone']?.toString() ?? '',
-        t['urgency']?.toString() ?? '',
+        urgencyLabel[t['urgency']] ?? '',
         divisionNames[t['division_id']?.toString()] ?? '',
         t['status']?.toString() ?? '',
         t['taken_by']?.toString() ?? '',
@@ -203,32 +212,50 @@ class _CommandCenterScreenState extends State<CommandCenterScreen> {
     }
 
     final safeName = widget.eventName.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_');
-    downloadXlsx('LPJ_$safeName.xlsx', rows);
+    try {
+      downloadXlsx('LPJ_$safeName.xlsx', rows);
+    } catch (e) {
+      // e.g. in the Android app (download only works in the browser)
+      showMessage('Export gagal: $e');
+    }
   }
 
   // ---------- Tampilan ----------
 
   @override
   Widget build(BuildContext context) {
+    final isNarrow = MediaQuery.sizeOf(context).width < narrowWidth;
+
     return DefaultTabController(
       length: 2,
       child: Scaffold(
         appBar: AppBar(
           title: Text('Command Center: ${widget.eventName}'),
           actions: [
-            Padding(
-              padding: const EdgeInsets.only(right: 16),
-              child: FilledButton.icon(
+            // On a phone: icon only, so the title still fits
+            if (isNarrow)
+              IconButton(
                 icon: const Icon(Icons.download),
-                label: const Text('Export Excel / LPJ'),
+                tooltip: 'Export Excel / LPJ',
                 onPressed: exportExcel,
+              )
+            else
+              Padding(
+                padding: const EdgeInsets.only(right: 16),
+                child: FilledButton.icon(
+                  icon: const Icon(Icons.download),
+                  label: const Text('Export Excel / LPJ'),
+                  onPressed: exportExcel,
+                ),
               ),
-            ),
           ],
-          bottom: const TabBar(
+          bottom: TabBar(
             tabs: [
-              Tab(icon: Icon(Icons.view_kanban), text: 'Live Board'),
-              Tab(icon: Icon(Icons.rate_review), text: 'Coordinator Review Queue'),
+              const Tab(icon: Icon(Icons.view_kanban), text: 'Live Board'),
+              Tab(
+                icon: const Icon(Icons.rate_review),
+                text: isNarrow ? 'Review Queue' : 'Coordinator Review Queue',
+              ),
             ],
           ),
         ),
@@ -262,49 +289,100 @@ class _CommandCenterScreenState extends State<CommandCenterScreen> {
     return tickets.where((t) => t['status'] == status).toList();
   }
 
+  // Most urgent first (CRITICAL, HIGH, NORMAL); same urgency -> oldest first
+  List<Map<String, dynamic>> sortByUrgency(List<Map<String, dynamic>> list) {
+    list.sort((a, b) {
+      final rankA = urgencyRank[a['urgency']] ?? 1;
+      final rankB = urgencyRank[b['urgency']] ?? 1;
+      if (rankA != rankB) return rankA.compareTo(rankB);
+      return a['created_at'].toString().compareTo(b['created_at'].toString());
+    });
+    return list;
+  }
+
   Widget buildKanbanBoard() {
-    return Padding(
-      padding: const EdgeInsets.all(12),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          buildColumn('Incoming', Colors.orange, ticketsWithStatus('incoming')),
-          buildColumn('In Progress', Colors.blue, ticketsWithStatus('in_progress')),
-          buildColumn('Done', Colors.green, ticketsWithStatus('done')),
-        ],
-      ),
+    final incoming = sortByUrgency(ticketsWithStatus('incoming'));
+    final inProgress = sortByUrgency(ticketsWithStatus('in_progress'));
+    final done = ticketsWithStatus('done');
+
+    final columns = [
+      buildColumn('Incoming', Colors.orange, incoming),
+      buildColumn('In Progress', Colors.blue, inProgress),
+      buildColumn('Done', Colors.green, done),
+    ];
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Phone: 3 buttons on top, tap one to show that column
+        if (constraints.maxWidth < narrowWidth) {
+          return Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: SegmentedButton<int>(
+                    showSelectedIcon: false,
+                    segments: [
+                      ButtonSegment(value: 0, label: Text('Incoming (${incoming.length})')),
+                      ButtonSegment(value: 1, label: Text('Progress (${inProgress.length})')),
+                      ButtonSegment(value: 2, label: Text('Done (${done.length})')),
+                    ],
+                    selected: {phoneColumn},
+                    onSelectionChanged: (selected) {
+                      setState(() => phoneColumn = selected.first);
+                    },
+                  ),
+                ),
+              ),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.all(8),
+                  child: columns[phoneColumn],
+                ),
+              ),
+            ],
+          );
+        }
+        // Laptop: 3 columns that share the width
+        return Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [for (final column in columns) Expanded(child: column)],
+          ),
+        );
+      },
     );
   }
 
   Widget buildColumn(String title, Color color, List<Map<String, dynamic>> items) {
-    return Expanded(
-      child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 6),
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          color: Colors.grey.shade100,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Column(
-          children: [
-            Text(
-              '$title (${items.length})',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: color,
-              ),
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 6),
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade100,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        children: [
+          Text(
+            '$title (${items.length})',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: color,
             ),
-            const SizedBox(height: 8),
-            Expanded(
-              child: items.isEmpty
-                  ? const Center(child: Text('Kosong'))
-                  : ListView(
-                      children: [for (final t in items) buildTicketCard(t)],
-                    ),
-            ),
-          ],
-        ),
+          ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: items.isEmpty
+                ? const Center(child: Text('Kosong'))
+                : ListView(
+                    children: [for (final t in items) buildTicketCard(t)],
+                  ),
+          ),
+        ],
       ),
     );
   }
@@ -339,18 +417,26 @@ class _CommandCenterScreenState extends State<CommandCenterScreen> {
                 '⚠ LEWAT SLA 3 MENIT',
                 style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
               ),
-            Text(
-              ticket['transcript']?.toString() ?? '-',
-              style: const TextStyle(fontWeight: FontWeight.bold),
+            // Urgency badge + AI confidence (proof that the AI sorted this ticket)
+            Wrap(
+              spacing: 6,
+              runSpacing: 4,
+              children: [
+                buildUrgencyBadge(ticket['urgency']),
+                buildSourceBadge(ticket),
+              ],
             ),
+            const SizedBox(height: 6),
+            Text(
+              '${ticket['category'] ?? 'Laporan'} · ${ticket['zone'] ?? '-'}',
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+            ),
+            buildTranscript(ticket['transcript']),
             const SizedBox(height: 6),
             Wrap(
               spacing: 6,
               runSpacing: 4,
               children: [
-                buildChip(Icons.category, ticket['category']),
-                buildChip(Icons.place, ticket['zone']),
-                buildChip(Icons.priority_high, ticket['urgency']),
                 buildChip(Icons.groups, divisionNames[ticket['division_id']?.toString()]),
                 buildChip(Icons.person, ticket['reporter_name']),
               ],
@@ -375,6 +461,64 @@ class _CommandCenterScreenState extends State<CommandCenterScreen> {
               ),
           ],
         ),
+      ),
+    );
+  }
+
+  // Colored label: CRITICAL (red), HIGH (orange), NORMAL (grey)
+  Widget buildUrgencyBadge(dynamic urgency) {
+    final color = urgencyColor[urgency] ?? Colors.blueGrey;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(
+        urgencyLabel[urgency] ?? 'NORMAL',
+        style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+      ),
+    );
+  }
+
+  // "AI 92%" for voice tickets sorted by Gemini, "2-Tap" for tickets from the 2-Tap buttons
+  Widget buildSourceBadge(Map<String, dynamic> ticket) {
+    final score = ticket['confidence_score'];
+    final text = score == null
+        ? '2-Tap'
+        : 'AI ${(double.parse(score.toString()) * 100).round()}%';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: Colors.deepPurple),
+      ),
+      child: Text(
+        text,
+        style: const TextStyle(color: Colors.deepPurple, fontSize: 11, fontWeight: FontWeight.bold),
+      ),
+    );
+  }
+
+  // Small italic text: what the volunteer actually said (transcript from Gemini)
+  Widget buildTranscript(dynamic transcript) {
+    if (transcript == null || transcript.toString().trim().isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.mic, size: 14, color: Colors.grey),
+          const SizedBox(width: 4),
+          Expanded(
+            child: Text(
+              '"$transcript"',
+              style: TextStyle(fontSize: 12, fontStyle: FontStyle.italic, color: Colors.grey.shade700),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -413,50 +557,70 @@ class _CommandCenterScreenState extends State<CommandCenterScreen> {
       selectedDivision = null;
     }
 
+    final info = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Wrap(
+          spacing: 6,
+          runSpacing: 4,
+          children: [
+            buildUrgencyBadge(ticket['urgency']),
+            buildSourceBadge(ticket),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Text(
+          '${ticket['category'] ?? 'Laporan'} · ${ticket['zone'] ?? '-'}',
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
+        buildTranscript(ticket['transcript']),
+      ],
+    );
+
+    final actions = Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        DropdownButton<String>(
+          value: selectedDivision,
+          hint: const Text('Pilih divisi'),
+          items: [
+            for (final entry in divisionNames.entries)
+              DropdownMenuItem(value: entry.key, child: Text(entry.value)),
+          ],
+          onChanged: (value) {
+            if (value == null) return;
+            setState(() => reviewChoices[ticketId] = value);
+          },
+        ),
+        FilledButton(
+          onPressed: selectedDivision == null
+              ? null
+              : () => approveTicket(ticket, selectedDivision!),
+          child: const Text('Kirim ke Incoming'),
+        ),
+      ],
+    );
+
+    final isNarrow = MediaQuery.sizeOf(context).width < narrowWidth;
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(12),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
+        // Phone: info on top, dropdown + button below. Laptop: side by side.
+        child: isNarrow
+            ? Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
+                children: [info, const SizedBox(height: 8), actions],
+              )
+            : Row(
                 children: [
-                  Text(
-                    ticket['transcript']?.toString() ?? '-',
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Kategori: ${ticket['category'] ?? '-'}  |  '
-                    'Zona: ${ticket['zone'] ?? '-'}  |  '
-                    'Urgensi: ${ticket['urgency'] ?? '-'}',
-                  ),
+                  Expanded(child: info),
+                  const SizedBox(width: 12),
+                  actions,
                 ],
               ),
-            ),
-            const SizedBox(width: 12),
-            DropdownButton<String>(
-              value: selectedDivision,
-              hint: const Text('Pilih divisi'),
-              items: [
-                for (final entry in divisionNames.entries)
-                  DropdownMenuItem(value: entry.key, child: Text(entry.value)),
-              ],
-              onChanged: (value) {
-                if (value == null) return;
-                setState(() => reviewChoices[ticketId] = value);
-              },
-            ),
-            const SizedBox(width: 8),
-            FilledButton(
-              onPressed: selectedDivision == null
-                  ? null
-                  : () => approveTicket(ticket, selectedDivision!),
-              child: const Text('Kirim ke Incoming'),
-            ),
-          ],
-        ),
       ),
     );
   }
