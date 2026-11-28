@@ -306,7 +306,7 @@ class _CommandCenterScreenState extends State<CommandCenterScreen> {
     final done = ticketsWithStatus('done');
 
     final columns = [
-      buildColumn('Incoming', Colors.orange, incoming),
+      buildColumn('Incoming', Colors.grey.shade800, incoming), // netral: oranye khusus badge HIGH
       buildColumn('In Progress', Colors.blue, inProgress),
       buildColumn('Done', Colors.green, done),
     ];
