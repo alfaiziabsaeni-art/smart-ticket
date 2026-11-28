@@ -173,6 +173,15 @@ class _SetupEventScreenState extends State<SetupEventScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
+  // Kosongkan event aktif supaya form "Buat Event Baru" muncul lagi
+  void startNewEvent() {
+    setState(() {
+      event = null;
+      divisions = [];
+      zones = [];
+    });
+  }
+
   void openCommandCenter() {
     Navigator.push(
       context,
@@ -197,6 +206,19 @@ class _SetupEventScreenState extends State<SetupEventScreen> {
       appBar: AppBar(
         title: Text(event == null ? 'Setup Event' : 'Setup: ${event!['name']}'),
         actions: [
+          // Balik ke form "Buat Event Baru"
+          if (event != null && isNarrow)
+            IconButton(
+              icon: const Icon(Icons.add),
+              tooltip: 'Event Baru',
+              onPressed: startNewEvent,
+            ),
+          if (event != null && !isNarrow)
+            TextButton.icon(
+              icon: const Icon(Icons.add),
+              label: const Text('Event Baru'),
+              onPressed: startNewEvent,
+            ),
           // On a phone: icon only, so the title still fits
           if (event != null && isNarrow)
             IconButton(
